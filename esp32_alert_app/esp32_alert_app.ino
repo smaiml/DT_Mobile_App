@@ -33,6 +33,9 @@ bool poxInitialized = false;
 unsigned long alertStartTime = 0;
 const unsigned long VIBRATE_DURATION = 10000; // 10 seconds (10000 ms)
 
+// Track button state to "click button once" in software
+int lastButtonState = HIGH;
+
 // Thresholds to determine if a sensor is "triggered"
 const float ACCEL_THRESHOLD_HIGH = 15.0; // Shaking the device (Earth gravity is ~9.8)
 const float ACCEL_THRESHOLD_LOW  = 5.0;  // Dropping the device
@@ -83,6 +86,9 @@ void setup() {
   pinMode(SOUND_PIN, INPUT);
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
 
+  // Initialize tracking state
+  lastButtonState = digitalRead(BUTTON_PIN);
+
   // 3. Initialize I2C lines
   Wire.begin(21, 22);
 
@@ -110,19 +116,12 @@ void setup() {
 }
 
 void loop() {
-  // --- Manual Override (BOOT Button) ---
-  // If BOOT button is pressed, instantly send the SMS/Location!
-  if (digitalRead(BOOT_BUTTON_PIN) == LOW) {
-    Serial.println("BOOT Button Pressed! Sending EMERGENCY ALERT instantly...");
-    if (deviceConnected) {
-      pCharacteristic->setValue("1");
-      pCharacteristic->notify();
-      Serial.println("BLE NOTIFY SENT: '1'");
-    } else {
-      Serial.println("Failed to send: Mobile app is not connected!");
-    }
-    delay(2000); // 2-second cooldown to avoid spamming
-  }
+  // Read our button and detect a literal "click" transition
+  int currentButtonState = digitalRead(BUTTON_PIN);
+  bool buttonJustClicked = (currentButtonState == LOW && lastButtonState == HIGH);
+  lastButtonState = currentButtonState;
+
+  // Manual Override is now handled in the main decision logic below!
 
   // --- BLE Connection Management ---
   if (!deviceConnected && oldDeviceConnected) {
@@ -168,18 +167,24 @@ void loop() {
     }
 
     // --- DECISION LOGIC ---
-    if (triggeredCount >= 2) {
-      Serial.println("ALARM TRIGGERED! (>=2 sensors detected)");
+    bool bootPressed = (digitalRead(BOOT_BUTTON_PIN) == LOW);
+    if (triggeredCount >= 2 || bootPressed) {
+      if (bootPressed) {
+        Serial.println("BOOT Button Pressed! Starting 10s vibration alert...");
+        // Software auto-click mechanism - ignore the immediate hardware state
+      } else {
+        Serial.println("ALARM TRIGGERED! (>=2 sensors detected)");
+      }
       isAlerting = true;
       alertStartTime = millis();
       digitalWrite(VIBRATION_PIN, HIGH); // Turn motor ON
+      delay(500); // 500ms debounce to prevent immediate cancellation if button is held
     }
   } 
   else {
     // --- WE ARE IN THE ALERT STATE ---
-    bool buttonPressed = (digitalRead(BUTTON_PIN) == LOW);
-    
-    if (buttonPressed) {
+    // Use the actual "click" event (transition) instead of the continuous pin state!
+    if (buttonJustClicked) {
       Serial.println("Button Clicked. Alarm CANCELLED!");
       digitalWrite(VIBRATION_PIN, LOW); // Stop motor
       isAlerting = false;               // Reset system to listen again
